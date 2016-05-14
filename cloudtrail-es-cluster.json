@@ -1,0 +1,527 @@
+{
+	"AWSTemplateFormatVersion": "2010-09-09",
+	"Description": "AWS CloudFormation Template for launching an AWS Elasticsearch cluster to visualize CloudTrail entries. The template uses CloudWatch Logs subscriptions to publish data to ElasticSearch and it launches a proxy instance with Nginx to limit access to the ES endpoint",
+	"Parameters": {
+  		"CloudTrailName" : {
+			"Type": "String",
+    		"Default" : "ConcurrencyLabsAuditing",
+    		"Description" : "Name of the trail that will be used for auditing"
+  		}, 
+  		"LogGroupName" : {
+    		"Type" : "String",
+    		"Default" : "CloudTrail/ConcurrencyLabsAuditing",
+    		"Description" : "Name of the CloudWatch Log Group CloudTrail will publish data to"
+  		},
+  		
+        "ProxyInstanceTypeParameter" : {
+            "Type" : "String",
+            "Default" : "t2.micro",
+            "AllowedValues" : ["t2.nano", "t2.micro", "t2.medium","t2.large"],
+            "Description" : "EC2 Instance type for Nginx proxy to Elasticsearch cluster: t2 nano, micro, medium or arge. Default is t2.micro."
+        },
+
+		"KeyName": {
+			"Description": "Name of an existing EC2 KeyPair to enable SSH access to the Nginx proxy instance",
+			"Type": "AWS::EC2::KeyPair::KeyName",
+			"ConstraintDescription": "Must be the name of an existing EC2 KeyPair."
+		},
+
+        "AllowedIPForEsCluster" : {
+            "Type" : "String",
+            "Description" : "Please specify one IP address that will have access to your Elasticsearch cluster. You can change this value later.",
+            "AllowedPattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$",
+            "ConstraintDescription": "Please enter a valid IP address with the format xxx.xxx.xxx.xxx"
+        }
+  		
+  		
+  		
+  		
+  		
+	},
+	"Resources": {
+
+		"S3CloudTrailBucket": {
+		  "Type" : "AWS::S3::Bucket",
+		  "Properties" : {
+		  }
+		},
+
+
+		"S3CloudTrailBucketPolicy" : {
+          "DependsOn" : ["S3CloudTrailBucket"],
+		  "Type" : "AWS::S3::BucketPolicy",
+		  "Properties" : {
+		    "Bucket" : {"Ref" : "S3CloudTrailBucket"},
+		    "PolicyDocument": {
+		      "Statement":[
+		    {
+			"Sid": "AWSCloudTrailAclCheck20160319",
+		    "Effect": "Allow",
+	        "Action": "s3:GetBucketAcl",
+            "Resource": { "Fn::Join" : ["", ["arn:aws:s3:::", { "Ref" : "S3CloudTrailBucket" } ]]},
+            "Principal": {
+              "Service": "cloudtrail.amazonaws.com"
+            }
+            },
+		    {
+			"Sid": "AWSCloudTrailWrite20160319",
+			"Effect": "Allow",
+			"Action": "s3:PutObject",
+			"Resource": { "Fn::Join" : ["", ["arn:aws:s3:::", { "Ref" : "S3CloudTrailBucket" } , "/*" ]]},
+			"Principal": {
+				"Service": "cloudtrail.amazonaws.com"
+			},
+
+			"Condition": {
+				"StringEquals": {
+					"s3:x-amz-acl": "bucket-owner-full-control"
+				}
+			}
+		    }		      
+		      ]
+		    }
+		  }
+		},
+
+
+
+		"CloudTrailRole": {
+			"Type": "AWS::IAM::Role",
+			"Properties": {
+				"AssumeRolePolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [{
+						"Effect": "Allow",
+						"Principal": {
+							"Service": [
+								"cloudtrail.amazonaws.com"
+							]
+						},
+						"Action": [
+							"sts:AssumeRole"
+						]
+					}]
+				},
+				"Path": "/",
+				"Policies": [{
+					"PolicyName": "CloudTrailRolePolicy",
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [{
+							"Effect": "Allow",
+							"Action": [
+								"logs:CreateLogStream",
+								"logs:PutLogEvents"
+							],
+							"Resource": [
+								"arn:aws:logs:*:*:*"
+							]
+						}]
+					}
+				}]
+			}
+		},
+
+
+		
+		"CloudTrailLogGroup": {
+			"Type": "AWS::Logs::LogGroup",
+			"Properties": {
+				"RetentionInDays": 3653
+			}
+		},
+
+
+
+
+		"AuditTrail": {
+		  "DependsOn" : ["S3CloudTrailBucket", "S3CloudTrailBucketPolicy", "CloudTrailRole", "CloudTrailLogGroup"],
+		  "Type" : "AWS::CloudTrail::Trail",
+		  "Properties" : {
+		    "CloudWatchLogsLogGroupArn" : { "Fn::GetAtt" : [ "CloudTrailLogGroup", "Arn" ] },
+		    "CloudWatchLogsRoleArn" : { "Fn::GetAtt" : [ "CloudTrailRole", "Arn" ] },
+		    "IncludeGlobalServiceEvents" : true,
+		    "IsLogging" : true,
+		    "IsMultiRegionTrail" : true,
+		    "S3BucketName" : { "Ref" : "S3CloudTrailBucket" }
+		    }
+		},
+
+
+           "UpdateEsExecutionRole": {
+              "Type": "AWS::IAM::Role",
+              "Properties": {
+                "AssumeRolePolicyDocument": {
+                  "Version": "2012-10-17",
+                  "Statement": [{
+                      "Effect": "Allow",
+                      "Principal": {"Service": ["lambda.amazonaws.com"]},
+                      "Action": ["sts:AssumeRole"]
+                  }]
+                },
+                "Path": "/",
+                "Policies": [{
+                  "PolicyName": "root",
+                  "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [{
+                        "Effect": "Allow",
+                        "Action": ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
+                        "Resource": "arn:aws:logs:*:*:*"
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": ["es:*"],
+                        "Resource": "*"
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": ["s3:getObject","lambda:updateFunctionCode"],
+                        "Resource": "*"
+                    }                    
+                    ]
+                  }
+                }]
+              }
+            },
+
+
+		"LambdaEsSubscriptionFunction": {
+		  "Type": "AWS::Lambda::Function",
+          "DependsOn" : ["UpdateEsExecutionRole"],		  
+		  "Properties": {
+		    "Handler": "LogsToElasticsearch.handler",
+		    "Role": { "Fn::GetAtt" : ["UpdateEsExecutionRole", "Arn"] },
+		    "Code": {
+		      "S3Bucket": "concurrencylabs-cfn-templates",
+		      "S3Key": "cloudtrail-es-cluster/LogsToElasticsearch.zip"
+		    },
+		    "Runtime": "nodejs",
+		    "Timeout": "3"
+		  }
+		},
+
+		"LambdaInvokePermission": {
+		  "Type": "AWS::Lambda::Permission",
+          "DependsOn" : [ "LambdaEsSubscriptionFunction"],
+		  "Properties": {
+		    "FunctionName" : { "Fn::GetAtt" : ["LambdaEsSubscriptionFunction", "Arn"] },
+		    "Action": "lambda:*",
+		    "Principal":  {"Fn::Join": ["", ["logs.us-east-1.amazonaws.com"]]},
+		    "SourceArn": { "Fn::GetAtt" : ["CloudTrailLogGroup", "Arn"] },
+		    "SourceAccount": { "Ref" : "AWS::AccountId" }
+		    }
+		},
+
+
+        "LambdaSubscriptionFilter" : {
+            "Type" : "AWS::Logs::SubscriptionFilter",
+            "DependsOn" : ["LambdaInvokePermission"],
+            "Properties" : {
+            "DestinationArn" : {"Fn::GetAtt" : ["LambdaEsSubscriptionFunction", "Arn"] },
+            "LogGroupName" : { "Ref" : "CloudTrailLogGroup" },
+            "FilterPattern" : "[]"
+            }
+        },
+
+		
+	"CloudTrailESConcurrencyLabs": {
+	  "Type": "AWS::Elasticsearch::Domain",
+	  "Properties": {
+	    "ElasticsearchClusterConfig": {
+	      "InstanceCount": "1",
+	      "InstanceType": "t2.micro.elasticsearch"
+	    },
+	    "EBSOptions": {
+	      "EBSEnabled": true,
+	      "VolumeSize": 10,
+	      "VolumeType": "gp2"
+	    }
+	  }
+	},
+
+
+
+
+		"NgninxProxySecurityGroup": {
+			"Type": "AWS::EC2::SecurityGroup",
+			"Properties": {
+				"GroupDescription": "Enable HTTP access via port 80 and SSH access via port 22",
+				"SecurityGroupIngress": [{
+					"IpProtocol": "tcp",
+					"FromPort": "80",
+					"ToPort": "80",
+					"CidrIp": {"Fn::Join" : ["", [{"Ref": "AllowedIPForEsCluster"},"/32" ]] }
+				}, {
+					"IpProtocol": "tcp",
+					"FromPort": "22",
+					"ToPort": "22",
+					"CidrIp": "0.0.0.0/0"
+				}]
+			}
+		},
+
+
+		
+		"NginxEsProxy": {
+			"Type": "AWS::EC2::Instance",
+			"DependsOn": ["NgninxProxySecurityGroup","CloudTrailESConcurrencyLabs"],
+			"Metadata": {
+				"Comment": "Nginx Proxy to connect to ES cluster",
+				"AWS::CloudFormation::Init": {
+         			"configSets" : {
+            			"install_all" : [ "install_cfn", "install_nginx" ]
+          			},
+         		
+         		"install_cfn" : {
+            		"files" : {
+              		"/etc/cfn/cfn-hup.conf" : {
+                		"content" : { "Fn::Join" : ["", [
+		                  "[main]\n",
+        		          "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                		  "region=", { "Ref" : "AWS::Region" }, "\n"
+		                ]]},
+		                "mode"    : "000400",
+		                "owner"   : "root",
+		                "group"   : "root"
+		              },
+
+        		      "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+		                "content": { "Fn::Join" : ["", [
+		                  "[cfn-auto-reloader-hook]\n",
+		                  "triggers=post.update\n",
+		                  "path=Resources.NginxEsProxy.Metadata.AWS::CloudFormation::Init\n",
+		                  "action=/opt/aws/bin/cfn-init -v ",
+		                  "         --stack ", { "Ref" : "AWS::StackName" },
+		                  "         --resource NginxEsProxy ",
+		                  "         --configsets install_all ",
+		                  "         --region ", { "Ref" : "AWS::Region" }, "\n",
+		                  "runas=root\n"
+		                ]]}
+		              }
+		            },
+		            "services" : {
+		              "sysvinit" : {
+		                "cfn-hup" : { "enabled" : "true", "ensureRunning" : "true",
+		                              "files" : ["/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf"]}
+		              }
+		            }
+		          },
+
+		       "install_nginx": {
+		            "packages" : {
+		              "yum" : {
+		                "nginx" : []
+		              }
+		            },
+					"files": {
+							"/etc/nginx/nginx.conf": {
+								"content": {
+									"Fn::Join": [
+										"", [
+"user nginx;\n",
+"worker_processes auto;\n",
+"error_log /var/log/nginx/error.log;\n",
+"pid /var/run/nginx.pid;\n",
+"events {\n",
+"    worker_connections 1024;\n",
+"}\n",
+"http {\n",
+"    log_format  main  '$remote_addr - $remote_user [$time_local] \"$request\" '\n",
+"                      '$status $body_bytes_sent \"$http_referer\" '\n",
+"                      '\"$http_user_agent\" \"$http_x_forwarded_for\"';\n",
+"    access_log  /var/log/nginx/access.log  main;\n",
+"    sendfile            on;\n",
+"    tcp_nopush          on;\n",
+"    tcp_nodelay         on;\n",
+"    keepalive_timeout   65;\n",
+"    types_hash_max_size 2048;\n",
+"    include             /etc/nginx/mime.types;\n",
+"    default_type        application/octet-stream;\n",
+"    include /etc/nginx/conf.d/*.conf;\n",
+"    index   index.html index.htm;\n",
+"    server {\n",
+"        listen       80;\n",
+"        location / {\n",
+"           proxy_set_header   X-Forwarded-For $remote_addr;\n",
+"           proxy_set_header   Host $http_host;\n",
+"           proxy_pass         https://", { "Fn::GetAtt": ["CloudTrailESConcurrencyLabs", "DomainEndpoint"]}, ";\n",
+"           }\n",
+"    }\n",
+"}\n"
+										]
+									]
+								},
+								"mode": "000400",
+								"owner": "root",
+								"group": "root"
+							}
+					},
+			        "services" : {
+    	    		      "sysvinit" : {
+			                "nginx"    : { "enabled" : "true", "ensureRunning" : "true",
+		    	                             "files" : [ "/etc/nginx/nginx.conf" ] }
+		        	      }
+	            	}
+				}
+			}				
+			},
+			"Properties": {
+					"ImageId": "ami-08111162",
+					"KeyName": {
+						"Ref": "KeyName"
+					},
+					"InstanceType": {"Ref":"ProxyInstanceTypeParameter"},
+					"SecurityGroups": [{
+						"Ref": "NgninxProxySecurityGroup"
+					}],
+                	"Tags": [
+                        {
+                            "Value": "nginx-es-proxy", 
+                            "Key": "Name"
+                        }
+                    ],
+					"UserData": {
+						"Fn::Base64": {
+							"Fn::Join": [
+								"", [
+						           "#!/bin/bash -xe\n",
+						             "yum update -y aws-cfn-bootstrap\n",
+
+						             "/opt/aws/bin/cfn-init -v ",
+						             "         --stack ", { "Ref" : "AWS::StackName" },
+						             "         --resource NginxEsProxy ",
+						             "         --configsets install_all ",
+						             "         --region ", { "Ref" : "AWS::Region" }, "\n",
+						             "/opt/aws/bin/cfn-signal -e $? ",
+						             "         --stack ", { "Ref" : "AWS::StackName" },
+						             "         --resource NginxEsProxy ",
+						             "         --region ", { "Ref" : "AWS::Region" }, "\n"
+								]
+							]
+						}
+					}
+				},
+     			"CreationPolicy" : {
+			        "ResourceSignal" : {
+			          "Timeout" : "PT5M"
+			        }
+			      }				
+			},
+			
+              "UpdateEsFunction": {
+              "Type": "AWS::Lambda::Function",
+              "DependsOn": ["UpdateEsExecutionRole"],
+              "Properties": {
+                "Code": {
+                    "S3Bucket": "concurrencylabs-cfn-templates",
+                    "S3Key": "cloudtrail-es-cluster/UpdateElasticsearch.zip"
+                },
+                "Handler": "UpdateElasticsearch.handler",
+                "Role": { "Fn::GetAtt" : ["UpdateEsExecutionRole", "Arn"] },        
+                "Runtime": "nodejs4.3",
+                "Timeout": "59"
+              }
+            },
+            
+   	          "UpdateEs": {
+              "Type": "Custom::UpdateEs",
+              "DependsOn": ["UpdateEsFunction","CloudTrailESConcurrencyLabs"],
+              "Properties": {
+                "ServiceToken": { "Fn::GetAtt" : ["UpdateEsFunction", "Arn"] },
+                "DomainName": { "Ref" : "CloudTrailESConcurrencyLabs" },
+                "SourceIp": { "Fn::GetAtt" : ["NginxEsProxy", "PublicIp"] },
+                "EsClusterEndpoint": { "Fn::GetAtt" : ["CloudTrailESConcurrencyLabs", "DomainEndpoint"] },
+                "LambdaCodeBucket": "concurrencylabs-cfn-templates",
+                "LambdaCodeKey": "cloudtrail-es-cluster/LogsToElasticsearch.zip",
+                "LambdaFunctionName": { "Ref" : "LambdaEsSubscriptionFunction" }
+              }
+            }
+
+
+	},
+	"Outputs": {
+
+		"Documentation": {
+			"Description": "For more details, see this blog post",
+			"Value": "https://www.concurrencylabs.com/blog/auditing-third-parties-using-cloudtrail-elasticsearch/"
+		},
+
+
+		"CloudTrailName": {
+			"Description": "CloudTrail audit trail name",
+			"Value": {
+				"Ref": "AuditTrail"
+			}
+		},
+
+
+
+		"S3CloudTrailBucketName": {
+			"Description": "S3 bucket where CloudTrail entries will be sent to",
+			"Value": {
+				"Ref": "S3CloudTrailBucket"
+			}
+		},
+
+
+		"CloudTrailLogGroupName": {
+			"Description": "CloudWatch log group where CloudTrail entries will be sent to",
+			"Value": {
+				"Ref": "CloudTrailLogGroup"
+			}
+		},
+		
+		"ElasticSearchDomain": {
+			"Description": "Name of your AWS ElasticSearch domain.",
+			"Value": {"Ref": "CloudTrailESConcurrencyLabs"}
+		},
+		
+		"NginxProxyInstanceId": {
+			"Description": "The instance ID of the Nginx ES proxy",
+			"Value": {"Ref": "NginxEsProxy"}
+		},
+
+		"ProxyPublicIP": {
+			"Description": "Public IP address of the Nginx ES proxy. Use this address to access your Elasticsearch cluster",
+			"Value": {
+				"Fn::GetAtt": [
+					"NginxEsProxy",
+					"PublicIp"
+				]
+			}
+		},
+
+		"NgninxProxySecurityGroupId": {
+			"Description": "The EC2 Security Group ID for the Nginx ES proxy. Use this security group to update whitelisted IPs to the ES cluster.",
+			"Value": {
+				"Fn::GetAtt": [
+					"NgninxProxySecurityGroup",
+					"GroupId"
+				]
+			}
+		},
+
+
+
+
+		"ElasticSearchProxyEndpoint": {
+			"Description": "Use this address to access your Elasticsearch cluster  (wait until the Elasticsearch is in status Active, usually 5-10 minutes after CloudFormation marks the stack creation as complete)",
+			"Value": {"Fn::Join":["", ["http://", {"Fn::GetAtt": ["NginxEsProxy","PublicIp"]} ]]}
+		},
+
+
+		"KibanaProxyEndpoint": {
+			"Description": "Use this address to access your Elasticsearch cluster using Kibana (wait until the Elasticsearch is in status Active, usually 5-10 minutes after CloudFormation marks the stack creation as complete)",
+			"Value": {"Fn::Join":["", ["http://", {"Fn::GetAtt": ["NginxEsProxy","PublicIp"]},"/_plugin/kibana/"]]}
+		},
+
+		"ProxyWhitelistedIp": {
+			"Description": "IP address that is whitelisted to access your Nginx proxy. You can change this value by updating the security group of your Nginx proxy (see blog post above for more details)",
+			"Value": {"Ref": "AllowedIPForEsCluster"}
+		}
+		
+
+
+	}
+}
