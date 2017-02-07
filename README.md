@@ -1,6 +1,11 @@
 
 ## Visualize CloudTrail data using Kibana running on AWS Elasticsearch 
 
+
+Please read <a href="https://www.concurrencylabs.com/blog/auditing-third-parties-using-cloudtrail-elasticsearch/" target="new">this article in the Concurrency Labs blog</a> for more details.
+
+
+
 Visualizing CloudTrail logs with Elasticsearch Kibana has been covered in many places,
 including the AWS Official Blog. For example, there's <a href="https://aws.amazon.com/blogs/aws/cloudwatch-logs-subscription-consumer-elasticsearch-kibana-dashboards/" target="new">this nice article</a> that
 describes a way to create an Elasticsearch cluster and ingest CloudTrail data to it.
@@ -20,6 +25,7 @@ Lambda -> AWS Elasticsearch
 ### Artifacts in this repo
 
 **CloudFormation template - cloudtrail-es-cluster.json**
+
 This CloudFormation template creates:
 
 * Multi-region CloudTrail trail
@@ -33,9 +39,11 @@ This CloudFormation template creates:
 
 
 **Lambda function code - LogsToElasticsearch.js**
+
 Lambda function code that writes data to AWS Elasticsearch domain.
 
 **Lambda function code - UpdateElasticsearch.js**
+
 Required by CloudFormation during the stack creation. It updates the Elasticsearch cluster
 access policy with the IP of the Nginx reverse proxy. It also updates the code of the LogsToElasticsearch
 function so it points to the URL of the recently created AWS Elasticsearch cluster. 

@@ -196,8 +196,8 @@
 		      "S3Bucket": "concurrencylabs-cfn-templates",
 		      "S3Key": "cloudtrail-es-cluster/LogsToElasticsearch.zip"
 		    },
-		    "Runtime": "nodejs",
-		    "Timeout": "3"
+		    "Runtime": "nodejs4.3",
+		    "Timeout": "10"
 		  }
 		},
 
@@ -232,6 +232,7 @@
 	      "InstanceCount": "1",
 	      "InstanceType": "t2.micro.elasticsearch"
 	    },
+	    "ElasticsearchVersion":"2.3",
 	    "EBSOptions": {
 	      "EBSEnabled": true,
 	      "VolumeSize": 10,
