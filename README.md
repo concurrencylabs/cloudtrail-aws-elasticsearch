@@ -22,6 +22,11 @@ in your default VPC, giving you access to the Elasticsearch domain within your V
 The data flows in the following sequence: CloudTrail -> CloudWatch Logs -> Subscription Filter ->
 Lambda -> AWS Elasticsearch 
 
+![Architecture](https://www.concurrencylabs.com/img/posts/8-cloudtrail-es/cloudcraft-CloudTrail+ES+Proxy.png)
+
+
+
+
 ### Artifacts in this repo
 
 **CloudFormation template - cloudtrail-es-cluster.json**
